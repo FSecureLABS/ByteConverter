@@ -18,7 +18,7 @@ namespace QualifiersErasure
 
 	struct QualifiedType
 	{
-		volatile TypeA m_a = GenerateRandomValue<TypeA>();
+		const TypeA m_a = GenerateRandomValue<TypeA>();
 		const TypeB m_b = GenerateRandomString(16);
 	};
 }
@@ -99,13 +99,5 @@ namespace QualifiersErasure
 		CHECK(bv == m_serialized);
 		CHECK(qualified.m_a == m_simple.m_a);
 		CHECK(qualified.m_b == m_simple.m_b);
-	}
-
-	TEST_CASE_METHOD(Fixture, "ByteReader is compatible with volatile.")
-	{
-		volatile TypeA a;
-		auto view = ByteView{ m_serialized };
-		ByteReader{ view }.Read(a);
-		REQUIRE(a == m_qualified.m_a);
 	}
 };

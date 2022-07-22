@@ -20,91 +20,45 @@ namespace FSecure
 	template <typename T, typename = void>
 	struct ByteConverter {};
 
+	/// Contains internal logic of FSecure classes and functions.
 	namespace Detail
 	{
-		enum class SizeFunction
+		/// Describes possible states of ByteConverter::Size signature.
+		enum class FunctionSize
 		{
 			absent,
 			compileTime,
 			runTime,
 		};
 
-		enum class ToFunction
+		/// Describes possible states of ByteConverter::To signature.
+		enum class FunctionTo
 		{
 			absent,
 			createsContainer,
 			expandsContainer,
 		};
 
-		namespace Impl
+		/// Concepts to check signature of ByteConverter for provided type.
+		namespace Impl::Deduction
 		{
-			namespace SizeConcept
+			namespace FunctionSize
 			{
-				template <typename T, typename = void>
-				struct CompileTime
-					: std::false_type {};
+				template <typename T>
+				concept CompileTime = requires { ByteConverter<T>::Size(); };
 
 				template <typename T>
-				struct CompileTime<T, decltype(void(ByteConverter<T>::Size()))>
-					: std::true_type {};
-
-				template <typename T, typename = void>
-				struct RunTime
-					: std::false_type {};
-
-				template <typename T>
-				struct RunTime<T, decltype(void(ByteConverter<T>::Size(std::declval<T>())))>
-					: std::true_type {};
+				concept RunTime = requires(T t) { ByteConverter<T>::Size(t); };
 			}
 
-			namespace ToConcept
+			namespace FunctionTo
 			{
-				template <typename T, typename = void>
-				struct Create
-					: std::false_type {};
+				template <typename T>
+				concept CreatesContainer = requires(T t) { ByteConverter<T>::To(t); };
 
 				template <typename T>
-				struct Create<T, decltype(void(ByteConverter<T>::To(std::declval<T>())))>
-					: std::true_type {};
-
-				template <typename T, typename = void>
-				struct Expand
-					: std::false_type {};
-
-				template <typename T>
-				struct Expand<T, decltype(void(ByteConverter<T>::To(std::declval<T>(), std::declval<ByteVector&>())))>
-					: std::true_type {};
+				concept ExpandsContainer = requires(T t, ByteVector & bv) { ByteConverter<T>::To(t, bv); };
 			}
-
-			template<SizeFunction V>
-			using SizeFunctionConstant = std::integral_constant<SizeFunction, V>;
-
-			template<ToFunction V>
-			using ToFunctionConstant = std::integral_constant<ToFunction, V>;
-
-			template <typename T, typename = void>
-			struct FunctionSize
-				: SizeFunctionConstant<SizeFunction::absent> {};
-
-			template <typename T>
-			struct FunctionSize<T, std::enable_if_t<SizeConcept::CompileTime<T>::value>>
-				: SizeFunctionConstant<SizeFunction::compileTime> {};
-
-			template <typename T>
-			struct FunctionSize<T, std::enable_if_t<!SizeConcept::CompileTime<T>::value && SizeConcept::RunTime<T>::value>>
-				: SizeFunctionConstant<SizeFunction::runTime> {};
-
-			template <typename T, typename = void>
-			struct FunctionTo
-				: ToFunctionConstant<ToFunction::absent> {};
-
-			template <typename T>
-			struct FunctionTo<T, std::enable_if_t<!ToConcept::Expand<T>::value && ToConcept::Create<T>::value>>
-				: ToFunctionConstant<ToFunction::createsContainer> {};
-
-			template <typename T>
-			struct FunctionTo<T, std::enable_if_t<ToConcept::Expand<T>::value>>
-				: ToFunctionConstant<ToFunction::expandsContainer> {};
 		}
 
 		/// Class detecting specifics of ByteConverter specialization for given type.
@@ -113,14 +67,18 @@ namespace FSecure
 		{
 			struct FunctionSize
 			{
-				using type = SizeFunction;
-				static constexpr auto value = Impl::FunctionSize<T>::value;
+				using type = Detail::FunctionSize;
+				static constexpr auto value = Impl::Deduction::FunctionSize::CompileTime<T> ?
+					type::compileTime :
+					Impl::Deduction::FunctionSize::RunTime<T> ? type::runTime : type::absent;
 			};
 
 			struct FunctionTo
 			{
-				using type = ToFunction;
-				static constexpr auto value = Impl::FunctionTo<T>::value;
+				using type = Detail::FunctionTo;
+				static constexpr auto value = Impl::Deduction::FunctionTo::ExpandsContainer<T> ?
+					type::expandsContainer :
+					Impl::Deduction::FunctionTo::CreatesContainer<T> ? type::createsContainer : type::absent;
 			};
 
 			static_assert(!((FunctionTo::value == FunctionTo::type::expandsContainer) && (FunctionSize::value == FunctionSize::type::absent)),
@@ -129,17 +87,11 @@ namespace FSecure
 
 		/// Checks if ByteConverter is defined for all types.
 		template <typename ...Ts>
-		struct WriteCondition
-		{
-			static constexpr bool value = ((ConverterDeduction<Ts>::FunctionTo::value != ToFunction::absent) && ...);
-		};
+		concept WriteCondition = ((ConverterDeduction<Ts>::FunctionTo::value != FunctionTo::absent) && ...);
 
 		/// Check if type can be concatenated
 		template <typename ...Ts>
-		struct ConcatCondition
-		{
-			static constexpr bool value = (sizeof...(Ts) > 0) && ((Utils::IsOneOf<Ts, ByteView, ByteVector>::value && ...));
-		};
+		concept ConcatCondition = (sizeof...(Ts) > 0) && ((Utils::IsOneOf<Ts, ByteView, ByteVector> && ...));
 	}
 
 	/// An owning container.
@@ -152,7 +104,6 @@ namespace FSecure
 		/// Type of stored values.
 		using ValueType = Super::value_type;
 
-
 		/// Destructor.
 		~ByteVector()
 		{
@@ -160,7 +111,6 @@ namespace FSecure
 			Clear();
 #endif
 		}
-
 
 		/// Copy constructor.
 		/// @param other. Object to copy.
@@ -257,7 +207,8 @@ namespace FSecure
 		/// @param arg. Object to be stored.
 		/// @param args. Optional other objects to be stored.
 		/// @return itself to allow chaining.
-		template <typename T, typename ...Ts, typename std::enable_if_t<Detail::WriteCondition<T, Ts...>::value, int> = 0>
+		template <typename T, typename ...Ts>
+		requires Detail::WriteCondition<T, Ts...>
 		ByteVector& Write(T const& arg, Ts const& ...args)
 		{
 			reserve(size() + Size<T, Ts...>(arg, args...));
@@ -270,7 +221,8 @@ namespace FSecure
 		/// Does not write header with size..
 		/// @param args. Objects to be stored.
 		/// @return itself to allow chaining.
-		template <typename ...Ts, typename std::enable_if_t<Detail::ConcatCondition<Ts...>::value, int> = 0>
+		template <typename ...Ts>
+		requires Detail::ConcatCondition<Ts...>
 		ByteVector& Concat(Ts const& ...args)
 		{
 			auto oldSize = size();
@@ -293,7 +245,8 @@ namespace FSecure
 		/// @param arg. Object to be stored.
 		/// @param args. Optional other objects to be stored.
 		/// @see ByteVector::Write for more informations.
-		template <typename T, typename ...Ts, typename std::enable_if_t<Detail::WriteCondition<T, Ts...>::value, int> = 0>
+		template <typename T, typename ...Ts>
+		requires Detail::WriteCondition<T, Ts...>
 		static ByteVector Create(T const& arg, Ts const& ...args)
 		{
 			return std::move(ByteVector{}.Write(arg, args...));
@@ -328,7 +281,8 @@ namespace FSecure
 		/// @param arg. Object to be stored. There must exsist FSecure::ByteConverter<T>::To method avalible to store custom type.
 		/// @param args. Rest of objects that will be handled with recursion.
 		/// @return itself to allow chaining.
-		template<typename T, typename ...Ts, typename std::enable_if_t<Detail::WriteCondition<T, Ts...>::value, int> = 0>
+		template<typename T, typename ...Ts>
+		requires Detail::WriteCondition<T, Ts...>
 		ByteVector& Store(T const& arg, Ts const& ...args)
 		{
 			auto oldSize = size();

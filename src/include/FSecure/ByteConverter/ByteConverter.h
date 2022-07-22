@@ -10,7 +10,8 @@ namespace FSecure
 {
 	/// ByteConverter specialization for arithmetic types.
 	template <typename T>
-	struct ByteConverter<T, std::enable_if_t<std::is_arithmetic_v<T>>>
+	requires std::is_arithmetic_v<T>
+	struct ByteConverter<T>
 	{
 		/// Serialize arithmetic type to ByteVector.
 		/// @param obj. Object to be serialized.
@@ -46,7 +47,8 @@ namespace FSecure
 
 	/// ByteConverter specialization for enum.
 	template <typename T>
-	struct ByteConverter<T, std::enable_if_t<std::is_enum_v<T>>>
+	requires std::is_enum_v<T>
+	struct ByteConverter<T>
 	{
 		/// Serialize enum type to ByteVector.
 		/// @param enumInstance. Object to be serialized.
@@ -74,7 +76,8 @@ namespace FSecure
 
 	/// ByteConverter specialization for iterable types.
 	template <typename T>
-	struct ByteConverter<T, std::enable_if_t<Utils::Container::IsIterable<T>::value>>
+	requires Utils::Container::IsIterable<T>
+	struct ByteConverter<T>
 	{
 		/// Serialize iterable type to ByteVector.
 		/// @param obj. Object to be serialized.
@@ -256,84 +259,73 @@ namespace FSecure
 		}
 	};
 
-	/// ByteConverter specialization for tuple.
-	template <typename T>
-	struct ByteConverter<T, std::enable_if_t<Utils::IsTuple<T>::value>>
+	/// Contains internal logic of FSecure classes and functions.
+	namespace Detail
 	{
-		/// Serialize tuple type to ByteVector.
-		/// @param tupleInstance. Object to be serialized.
-		/// @param bv. ByteVector to be expanded.
-		static void To(T const& tupleInstance, ByteVector& bv)
+		/// Concepts determining if type provides generic access to members.
+		namespace MemberGenericAccess
 		{
-			TupleHandler<T>::Write(bv, tupleInstance);
+			/// Check if type provides generic access to one element by index.
+			template <typename T, size_t N>
+			concept OneElement = requires(T t)
+			{
+				typename std::tuple_element<N, T>::type;
+				std::get<N>(t);
+			};
+
+			/// Function checking if type provides generic access to each element specified by index sequence.
+			template<typename T, size_t... Is>
+			constexpr bool CanAccessEachElement(std::index_sequence<Is...>)
+			{
+				return (OneElement<T, Is> && ...);
+			}
+
+			/// Check if type provides generic access to members, by supporting std::get and std::tuple_size.
+			template <typename T>
+			concept EachElement = requires(T t)
+			{
+				std::tuple_size<T>::value;
+				requires CanAccessEachElement<T>(std::make_index_sequence<std::tuple_size<T>::value>{});
+			};
 		}
 
-		/// Get size required after serialization.
-		/// @param tupleInstance. Instance for which size should be found.
-		/// @return size_t. Number of bytes used after serialization.
-		static size_t Size(T const& tupleInstance)
-		{
-			return TupleHandler<T>::Size(tupleInstance);
-		}
-
-
-		/// Deserialize from ByteView.
-		/// @param bv. Buffer with serialized data.
-		/// @return std::tuple.
-		static auto From(ByteView& bv)
-		{
-			return TupleHandler<T>::ReadExplicit(bv);
-		}
-
-	private:
-		/// @tparam Tpl. Tuple type to read/write.
-		/// @tparam N. How many elements of tuple to handle. Functions will use recursion, decrementing N with each call.
-		template <typename Tpl, size_t N = std::tuple_size_v<Tpl>>
+		/// Helper class responsible for handling type with generic access like tuple.
+		/// @tparam T. Tuple like type to read/write.
+		/// @tparam N. How many elements should be handled. Functions will use recursion, decrementing N with each call.
+		template <typename T, size_t N = std::tuple_size_v<T>>
 		struct TupleHandler
 		{
 			/// Function responsible for recursively packing data to ByteVector.
-			/// @param self. Reference to ByteVector object using TupleHandler.
+			/// @param bv. Reference to ByteVector object using TupleHandler.
 			/// @param t. reference to tuple.
-			static void Write([[maybe_unused]] ByteVector& self, [[maybe_unused]] Tpl const& tpl)
+			static void Write([[maybe_unused]] ByteVector& bv, [[maybe_unused]] T const& tpl)
 			{
 				if constexpr (N != 0)
 				{
-					self.Write(std::get<std::tuple_size_v<Tpl> - N>(tpl));
-					TupleHandler<Tpl, N - 1>::Write(self, tpl);
+					bv.Write(std::get<std::tuple_size_v<T> - N>(tpl));
+					TupleHandler<T, N - 1>::Write(bv, tpl);
 				}
 			}
 
 			/// Function responsible for recursively calculating buffer size needed for call with tuple argument.
 			/// @param t. reference to tuple.
 			/// @return size_t number of bytes needed.
-			static size_t Size([[maybe_unused]] Tpl const& tpl)
+			static size_t Size([[maybe_unused]] T const& tpl)
 			{
 				if constexpr (N != 0)
-					return ByteVector::Size(std::get<std::tuple_size_v<Tpl> - N>(tpl)) + TupleHandler<Tpl, N - 1>::Size(tpl);
+					return ByteVector::Size(std::get<std::tuple_size_v<T> - N>(tpl)) + TupleHandler<T, N - 1>::Size(tpl);
 				else
 					return 0;
 			}
 
-			/// C++ allows cast from pair to tuple of two, but not other way around.
-			/// This is oversight, because pair is much older concept than tuple, and no proposition was made to expand old type.
-			/// This function ensures, that TupleHandler always returns requested type, so no cast is necessary.
-			static auto ReadExplicit(ByteView& self)
-			{
-				auto tmp = Read(self);
-				if constexpr (Utils::IsPair<Tpl>::value)
-					return std::pair{ std::get<0>(tmp), std::get<1>(tmp) };
-				else
-					return tmp;
-			}
-
 			/// Function responsible for recursively packing data to tuple.
-			/// @param self. Reference to ByteView object using generate method.
-			static auto Read(ByteView& self)
+			/// @param bv. Reference to ByteView object using generate method.
+			static auto Read(ByteView& bv)
 			{
 				if constexpr (N != 0)
 				{
-					auto current = std::make_tuple(self.Read<Utils::RemoveCVR<std::tuple_element_t<std::tuple_size_v<Tpl> - N, Tpl>>>());
-					auto rest = TupleHandler<Tpl, N - 1>::Read(self);
+					auto current = std::make_tuple(bv.Read<std::remove_cvref_t<std::tuple_element_t<std::tuple_size_v<T> - N, T>>>());
+					auto rest = TupleHandler<T, N - 1>::Read(bv);
 					return std::tuple_cat(std::move(current), std::move(rest));
 				}
 				else
@@ -342,6 +334,71 @@ namespace FSecure
 				}
 			}
 		};
+
+		/// Tuple handler is using recursion and tuple concatenation to work.
+		/// Concepts within this namespace can determine, if tuple constructed by TupleHandler::From, can be transformed back to desired type.
+		namespace TupleHandlerCompatible
+		{
+			/// Desired type allows conversion from tuple.
+			template <typename T>
+			concept Convertible = requires(ByteView bv)
+			{
+				{ TupleHandler<T>::Read(bv) } -> std::convertible_to<T>;
+			};
+
+			/// Desired type provides constructor, taking all tuple members as arguments.
+			template <typename T>
+			concept Constructible = requires(ByteView bv)
+			{
+				{ make_from_tuple<T>(TupleHandler<T>::Read(bv)) } -> std::same_as<T>;
+			};
+
+			/// Desired type can be transformed form tuple.
+			template <typename T>
+			concept Transformable = Convertible<T> || Constructible<T>;
+		}
+	}
+
+	/// ByteConverter specialization for tuple.
+	template <typename T>
+	requires (!Utils::Container::IsIterable<T>) && Detail::MemberGenericAccess::EachElement<T> && Detail::TupleHandlerCompatible::Transformable<T>
+	struct ByteConverter<T>
+	{
+		/// Serialize tuple type to ByteVector.
+		/// @param tupleInstance. Object to be serialized.
+		/// @param bv. ByteVector to be expanded.
+		static void To(T const& tupleInstance, ByteVector& bv)
+		{
+			Detail::TupleHandler<T>::Write(bv, tupleInstance);
+		}
+
+		/// Get size required after serialization.
+		/// @param tupleInstance. Instance for which size should be found.
+		/// @return size_t. Number of bytes used after serialization.
+		static size_t Size(T const& tupleInstance)
+		{
+			return Detail::TupleHandler<T>::Size(tupleInstance);
+		}
+
+		/// Deserialize from ByteView.
+		/// @param bv. Buffer with serialized data.
+		/// @return T.
+		/// This function must be capable to transform tuple back to T type.
+		/// For example C++ allows cast from pair to tuple of two, but not other way around.
+		/// If type cannot be converted, function will use tuple members to initialize new object.
+		///
+		/// @note make_from_tuple requires constructor.
+		/// If author specified tuple-like interface for their class, it is safe to assume constructor is also present.
+		/// This less restrictive form might be used if the assumption above turns out to be incorrect.
+		/// return apply(Utils::Construction::Braces<T>{}, std::move(tmp));
+		static T From(ByteView& bv)
+		{
+			auto tmp = Detail::TupleHandler<T>::Read(bv);
+			if constexpr (std::is_convertible_v<decltype(tmp), T>)
+				return tmp;
+			else
+				return make_from_tuple<T>(std::move(tmp));
+		}
 	};
 
 	/// @brief Class providing simple way of generating ByteConverter of custom types by treating them as tuple.
@@ -359,6 +416,19 @@ namespace FSecure
 		/// @tparam C Type for serialization.
 		template <typename C>
 		using ConvertType = decltype(ByteConverter<C>::Convert(std::declval<C>()));
+
+		/// @brief Type responsible for removing qualifiers from tuple template parameters.
+		/// This structure is only defined for tuple types.
+		template <typename C>
+		struct EraseQualifiers;
+
+		/// @brief Type responsible for removing qualifiers from tuple template parameters.
+		/// @tparam ...Cs tuple template parameters.
+		template <typename ...Cs>
+		struct EraseQualifiers<std::tuple<Cs...>>
+		{
+			using type = std::tuple<std::remove_cvref_t<Cs>...>;
+		};
 
 		/// @brief Helper class compatible with Utils::Apply. Checks if size of all types have constexpr Size() function.
 		class IsSizeConstexpr
@@ -401,7 +471,7 @@ namespace FSecure
 		/// @return tuple of retrieved data for type construction.
 		static auto Convert(ByteView& bv)
 		{
-			return bv.Read<ConvertType<T>>();
+			return bv.Read<typename EraseQualifiers<ConvertType<T>>::type>();
 		}
 
 		// From this point forward will be implemented ByteConverter standard interface methods.
@@ -430,7 +500,8 @@ namespace FSecure
 		/// @note All template parameters are used only to determine if function should be defined.
 		/// @return size_t. Number of bytes used after serialization.
 		template <typename C = T>
-		static constexpr auto Size() -> std::enable_if_t<ConvertHaveConstexprSize<C>::value, size_t>
+		requires ConvertHaveConstexprSize<C>::value
+		static constexpr size_t Size()
 		{
 			return Utils::Apply<GetConstexprSize, ConvertType<T>>::value;
 		}
@@ -440,7 +511,8 @@ namespace FSecure
 		/// @note All template parameters are used only to determine if function should be defined.
 		/// @return size_t. Number of bytes used after serialization.
 		template <typename C = T>
-		static auto Size(T const& obj) -> std::enable_if_t<!ConvertHaveConstexprSize<C>::value, size_t>
+		requires (!ConvertHaveConstexprSize<C>::value)
+		static size_t Size(T const& obj)
 		{
 			return ByteVector::Size(ByteConverter<T>::Convert(obj));
 		}

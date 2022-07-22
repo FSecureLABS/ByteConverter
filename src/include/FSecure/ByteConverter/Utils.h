@@ -7,6 +7,7 @@
 #include <array>
 #include <vector>
 #include <tuple>
+#include <concepts>
 
 
 /// Define BYTE_CONVERTER_NO_EXCEPTIONS to disable exception definitions manually.
@@ -46,120 +47,83 @@ namespace FSecure::Utils
 		return ptr;
 	}
 
-	/// Template to evaluate if T is one of Ts types.
+	/// Concept to evaluate if T is one of Ts types.
 	template <typename T, typename ...Ts>
-	struct IsOneOf
-	{
-		constexpr static bool value = [](bool ret) { return ret; }((std::is_same_v<T, Ts> || ...));
-	};
+	concept IsOneOf = ((std::same_as<T, Ts> || ...));
 
-	/// Template to evaluate all of Ts are equal to T.
+	/// Concept to evaluate all of Ts are equal to T.
 	template <typename T, typename ...Ts>
-	struct IsSame
-	{
-		constexpr static bool value = [](bool ret) { return ret; }((std::is_same_v<T, Ts> && ...));
-	};
-
-	/// Template to strip type out of const, volatile and reference.
-	template <typename T>
-	using RemoveCVR = std::remove_cv_t<std::remove_reference_t<T>>;
+	concept IsSame = ((std::same_as<T, Ts> && ...));
 
 	/// Namespace for internal implementation.
 	namespace Impl
 	{
-		template <typename T>
-		struct IsTuple : std::false_type {};
+		template <template <typename ...> class Tmp, typename T>
+		struct IsTemplateInstance : std::false_type {};
 
-		template<typename ...T>
-		struct IsTuple<std::tuple<T...>> : std::true_type {};
-
-		template<typename ...T>
-		struct IsTuple<std::pair<T...>> : std::true_type {};
-
-		template<typename T>
-		struct IsPair : std::false_type {};
-
-		template<typename ...T>
-		struct IsPair<std::pair<T...>> : std::true_type {};
-
-		template <typename T, typename = void>
-		struct IsView : std::false_type {};
-
-		template <typename T>
-		struct IsView<std::basic_string_view<T>, void> : std::true_type {};
+		template<template <typename ...> class Tmp, typename ...T>
+		struct IsTemplateInstance<Tmp, Tmp<T...>> : std::true_type {};
 	}
 
-	/// Idiom for detecting tuple.
-	template <typename T>
-	struct IsTuple : Impl::IsTuple<T> {};
+	/// Concept for detecting template instance.
+	/// @example IsTemplateInstance<std::vector, MyType> will check if MyType is a vector.
+	/// @note Works only when all template arguments are types.
+	/// Template like std::array<typename, size_t> will fail to match arguments.
+	template<template <typename ...> class Tmp, class T>
+	concept IsTemplateInstance = Impl::IsTemplateInstance<Tmp, T>::value;
 
-	/// Idiom for detecting pair.
+	/// Concept for detecting pair.
+	template<class T>
+	concept IsPair = IsTemplateInstance<std::pair, T>;
+
+	/// Concept for detecting tuple.
+	template<class T>
+	concept IsTuple = IsPair<T> || IsTemplateInstance<std::tuple, T>;
+
+	/// Concept for detecting types that are basic_string_view.
 	template<typename T>
-	struct IsPair : Impl::IsPair<T> {};
+	concept IsBasicView = std::same_as<T, std::basic_string_view<typename T::value_type>>;
 
-	/// Check if type is designed to view data owned by other container.
-	template <typename T>
-	struct IsView : Impl::IsView<T> {};
+	/// Concept for detecting types that publicly inherit from basic_string_view.
+	template<typename T>
+	concept DerivesFromBasicView = std::derived_from<T, std::basic_string_view<typename T::value_type>>;
+
+	/// Concept for detecting view.
+	template<class T>
+	concept IsView = IsBasicView<T> || DerivesFromBasicView<T>;
 
 	/// Namespace full of helpers for containers template programing.
 	namespace Container
 	{
 		/// Get type stored by container that uses iterators.
 		template <typename T>
-		using StoredValue = RemoveCVR<decltype(*begin(std::declval<T>()))>;
-
-		/// Namespace for internal implementation.
-		namespace Impl
-		{
-			template <typename T, typename = void>
-			struct IsIterable : std::false_type {};
-
-			template <typename T>
-			struct IsIterable<T, std::void_t<decltype(begin(std::declval<T>()), end(std::declval<T>()))>> : std::true_type {};
-
-			template <typename T, typename = void>
-			struct HasDedicatedSize : std::false_type {};
-
-			template <typename T>
-			struct HasDedicatedSize<T, std::void_t<decltype(size(std::declval<T>()))>> : std::true_type {};
-
-			template <typename T, typename = void>
-			struct HasInsert : std::false_type {};
-
-			template <typename T>
-			struct HasInsert<T, std::void_t<decltype(std::declval<T>().insert(begin(std::declval<T>()), *end(std::declval<T>())))>> : std::true_type {};
-
-			template <typename T, typename = void>
-			struct HasReserve : std::false_type {};
-
-			template <typename T>
-			struct HasReserve<T, std::void_t<decltype(std::declval<T>().reserve(size_t{}))>> : std::true_type {};
-		}
+		using StoredValue = std::remove_cvref_t<decltype(*begin(std::declval<T>()))>;
 
 		/// Check if type can be iterated with begin() and end().
 		template <typename T>
-		struct IsIterable : Impl::IsIterable<T> {};
+		concept IsIterable = requires(T t) { begin(t); end(t); };
 
 		/// Check if type have own implementation of size method.
 		template <typename T>
-		struct HasDedicatedSize : Impl::HasDedicatedSize<T> {};
+		concept HasDedicatedSize = requires(T t) { size(t); };
 
 		/// Check if type have insert(iterator, value) function.
 		template <typename T>
-		struct HasInsert : Impl::HasInsert<T> {};
+		concept HasInsert = requires(T t) { t.insert(begin(t), *end(t)); };
 
 		/// Check if type can reserve some space to avoid reallocations.
 		template <typename T>
-		struct HasReserve : Impl::HasReserve<T> {};
+		concept HasReserve = requires(T t) { t.reserve(size_t{}); };
 
 		/// Returns number of elements in container, if size(T const&), or pair of begin(T const&), end(T const&) functions can be found.
 		struct Size
 		{
 			template <typename T>
-			auto operator () (T const& obj) const -> std::enable_if_t<HasDedicatedSize<T>::value || IsIterable<T>::value, size_t>
+			requires HasDedicatedSize<T> || IsIterable<T>
+			size_t operator () (T const& obj) const
 			{
 				size_t count = 0;
-				if constexpr (HasDedicatedSize<T>::value) count = size(obj);
+				if constexpr (HasDedicatedSize<T>) count = size(obj);
 				else for (auto it = obj.begin(); it != obj.end(); ++it, ++count);
 
 				return count;
@@ -187,7 +151,8 @@ namespace FSecure::Utils
 
 		/// Generator for any container that have insert method.
 		template <typename T>
-		struct Generator<T, std::enable_if_t<HasInsert<T>::value>>
+		requires HasInsert<T>
+		struct Generator<T>
 		{
 			/// Form with queued access to each of container values.
 			/// @param size. Defines numbers of elements in constructed container.
@@ -195,7 +160,7 @@ namespace FSecure::Utils
 			T operator()(uint32_t size, std::function<StoredValue<T>()> next)
 			{
 				T ret;
-				if constexpr (HasReserve<T>::value)
+				if constexpr (HasReserve<T>)
 					ret.reserve(size);
 
 				for (auto i = 0u; i < size; ++i)
@@ -207,7 +172,8 @@ namespace FSecure::Utils
 
 		/// Generator for any container that is simmilar to std::basic_string_view.
 		template <typename T>
-		struct Generator<T, std::enable_if_t<IsView<T>::value>>
+		requires IsView<T>
+		struct Generator<T>
 		{
 			/// Form with direct access to memory.
 			/// @param size. Defines numbers of elements in constructed container.
@@ -254,7 +220,17 @@ namespace FSecure::Utils
 			}
 		};
 
-		/// Determines how data is accessed to create container.
+		/// Concepts to check signature of generator for provided type.
+		namespace Impl::Deduction::GeneratorSignature
+		{
+			template<typename T>
+			concept Direct = requires { Generator<T>{}(uint32_t{}, std::declval<const char**>()); };
+
+			template<typename T>
+			concept Queued = requires { Generator<T>{}(uint32_t{}, std::function<StoredValue<T>()>{}); };
+		}
+
+		/// Determines how data should be accessed to create container.
 		enum class AccessType
 		{
 			unknown,
@@ -262,71 +238,28 @@ namespace FSecure::Utils
 			queued,
 		};
 
-		/// Namespace for internal implementation.
-		namespace Impl
-		{
-			namespace SignatureConcept
-			{
-				template <typename T, typename = void>
-				struct Direct
-					: std::false_type {};
-
-				template <typename T>
-				struct Direct<T, decltype(void(Generator<T>{}(uint32_t{}, std::declval<const char**>())))>
-					: std::true_type {};
-
-				template <typename T, typename = void>
-				struct Queued
-					: std::false_type {};
-
-				template <typename T>
-				struct Queued<T, decltype(void(Generator<T>{}(uint32_t{}, std::function<StoredValue<T>()>{})))>
-					: std::true_type {};
-			}
-
-			template<AccessType V>
-			using AccessTypeConstant = std::integral_constant<AccessType, V>;
-
-			template <typename T, typename = void>
-			struct GeneratorSignature
-				: AccessTypeConstant<AccessType::unknown> {};
-
-			template <typename T>
-			struct GeneratorSignature<T, std::enable_if_t<SignatureConcept::Direct<T>::value>>
-				: AccessTypeConstant<AccessType::directMemory> {};
-
-			template <typename T>
-			struct GeneratorSignature<T, std::enable_if_t<!SignatureConcept::Direct<T>::value && SignatureConcept::Queued<T>::value>>
-				: AccessTypeConstant<AccessType::queued> {};
-		}
-
 		/// Used to detect form of Generator operator() at compile time.
+		/// Direct access to memory is preferred over Queued.
 		template <typename T>
 		struct GeneratorSignature
 		{
 			using type = AccessType;
-			static constexpr auto value = Impl::GeneratorSignature<T>::value;
+			static constexpr auto value = Impl::Deduction::GeneratorSignature::Direct<T> ?
+				type::directMemory :
+				Impl::Deduction::GeneratorSignature::Queued<T> ? type::queued : type::unknown;
 		};
 	}
+
+	/// Concept checking if it is worth to take reference or copy by value.
+	template<typename T>
+	concept WorthAddingConstRef = !std::is_rvalue_reference_v<T> && (!std::is_trivial_v<std::remove_reference_t<T>> || sizeof(T) > sizeof(long long));
 
 	/// Namespace for internal implementation
 	namespace Impl
 	{
-		/// @brief Default implementation of class checking if it is worth to take reference or copy by value
-		/// Represents false.
-		template<typename T, typename = void>
-		struct WorthAddingConstRef : std::false_type {};
-
-		/// @brief Specialization of class checking if it is worth to take reference or copy by value.
-		/// Represents true.
-		template<typename T>
-		struct WorthAddingConstRef<T,
-			std::enable_if_t<!std::is_rvalue_reference_v<T> && (!std::is_trivial_v<std::remove_reference_t<T>> || (sizeof(T) > sizeof(long long)))>>
-			: std::true_type {};
-
 		/// @brief Default implementation of class declaring simpler type to use based on T type.
 		/// Represents copy by value.
-		template<typename T, typename = void>
+		template<typename T>
 		struct AddConstRefToNonTrivial
 		{
 			using type = std::remove_reference_t<T>;
@@ -335,19 +268,12 @@ namespace FSecure::Utils
 		/// @brief Specialization of class declaring simpler type to use based on T type.
 		/// Represents copy by reference.
 		template<typename T>
-		struct  AddConstRefToNonTrivial<T, std::enable_if_t<WorthAddingConstRef<T>::value>>
+		requires WorthAddingConstRef<T>
+		struct AddConstRefToNonTrivial<T>
 		{
 			using type = std::remove_reference_t<T> const&;
 		};
 	}
-
-	/// @brief Class checking if it is worth to take reference or copy by value.
-	template<typename T>
-	struct WorthAddingConstRef : Impl::WorthAddingConstRef<T> {};
-
-	/// @brief Simplified WorthAddingConstRef<T>::value.
-	template<typename T>
-	static constexpr auto WorthAddingConstRefV = WorthAddingConstRef<T>::value;
 
 	/// @brief Class declaring simpler type to use based on T type.
 	template<typename T>
@@ -400,14 +326,14 @@ namespace FSecure::Utils
 	/// @tparam T Class with function to be applied. Must define template<typename...> constexpr auto Apply(). Tuple types will be passed by parameter pack.
 	/// @tparam Tpl Tuple with types on which logic will be applied.
 	template <typename T, typename Tpl>
-	struct Apply
+	class Apply
 	{
-	private:
 		template <size_t ...Is>
 		constexpr static auto ApplyImpl(std::index_sequence<Is...>)
 		{
 			return T::template Apply<std::tuple_element_t<Is, Tpl>...>();
 		}
+
 	public:
 		constexpr static auto value = ApplyImpl(std::make_index_sequence<std::tuple_size<Tpl>::value>{});
 	};

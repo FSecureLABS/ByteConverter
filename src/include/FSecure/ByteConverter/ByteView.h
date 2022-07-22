@@ -165,13 +165,14 @@ namespace FSecure
 		/// @code auto [a, b, c] = someByteView.Read<int, float, std::string>(); @endcode
 		/// @note Returned types does not have to match exactly with Read template parameters list.
 		/// It is possible to create tags that will be used to retrieve different type.
-		template<typename T, typename ...Ts, typename = decltype(FSecure::ByteConverter<Utils::RemoveCVR<T>>::From(std::declval<ByteView&>()))>
+		template<typename T, typename ...Ts>
+		requires requires(ByteView& bv) { ByteConverter<std::remove_cvref_t<T>>::From(bv); }
 		auto Read()
 		{
 			auto copy = *this;
 			BYTE_CONVERTER_TRY
 			{
-				auto current = ByteConverter<Utils::RemoveCVR<T>>::From(*this);
+				auto current = ByteConverter<std::remove_cvref_t<T>>::From(*this);
 				if constexpr (sizeof...(Ts) == 0)
 					return current;
 				else if constexpr (sizeof...(Ts) == 1)
@@ -209,16 +210,6 @@ namespace FSecure
 			((ts = m_byteView.Read<decltype(ts)>()), ...);
 		}
 	};
-
-	namespace Utils
-	{
-		/// ByteView is a view.
-		template <>
-		struct IsView<ByteView>
-		{
-			constexpr static bool value = true;
-		};
-	}
 
 	namespace Literals
 	{

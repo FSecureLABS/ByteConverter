@@ -2,10 +2,12 @@
 
 #include <string>
 #include <random>
+#include <type_traits>
 
 #include "FSecure/ByteConverter/Utils.h"
 
-template <typename T = std::string, std::enable_if_t<FSecure::Utils::IsOneOf<T, std::string, std::wstring>::value, int> = 0>
+template <typename T = std::string>
+requires FSecure::Utils::IsOneOf<T, std::string, std::wstring>
 T GenerateRandomString(size_t size)
 {
 	constexpr std::string_view charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
